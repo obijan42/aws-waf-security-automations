@@ -1,29 +1,33 @@
-'''
-Copyright 2016 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-
-Licensed under the Amazon Software License (the "License"). You may not use this file except in compliance with the License. A copy of the License is located at
-
-    http://aws.amazon.com/asl/
-
-or in the "license" file accompanying this file. This file is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions and limitations under the License.
-'''
+#####################################################################################################################
+# Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.                                           #
+#                                                                                                                   #
+# Licensed under the Amazon Software License (the "License"). You may not use this file except in compliance        #
+# with the License. A copy of the License is located at                                                             #
+#                                                                                                                   #
+#     http://aws.amazon.com/asl/                                                                                    #
+#                                                                                                                   #
+# or in the "license" file accompanying this file. This file is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES #
+# OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions    #
+# and limitations under the License.                                                                                #
+######################################################################################################################
 
 import boto3
+import json
+import logging
 import math
 import time
-import json
 import datetime
+from urllib.request import Request, urlopen
 from os import environ
+from ipaddress import ip_address
+from botocore.config import Config
 
-from urllib2 import Request
-from urllib2 import urlopen
-
-print('Loading function')
+logging.getLogger().debug('Loading function')
 
 #======================================================================================================================
 # Constants
 #======================================================================================================================
-API_CALL_NUM_RETRIES = 3
+API_CALL_NUM_RETRIES = 5
 
 waf = None
 
@@ -31,66 +35,56 @@ waf = None
 # Auxiliary Functions
 #======================================================================================================================
 def waf_update_ip_set(ip_set_id, source_ip):
-    for attempt in range(API_CALL_NUM_RETRIES):
-        try:
-            response = waf.update_ip_set(IPSetId=ip_set_id,
-                ChangeToken=waf.get_change_token()['ChangeToken'],
-                Updates=[{
-                    'Action': 'INSERT',
-                    'IPSetDescriptor': {
-                        'Type': 'IPV4',
-                        'Value': "%s/32"%source_ip
-                    }
-                }]
-            )
-        except Exception, e:
-            delay = math.pow(2, attempt)
-            print "[waf_update_ip_set] Retrying in %d seconds..." % (delay)
-            time.sleep(delay)
-        else:
-            break
-    else:
-        print "[waf_update_ip_set] Failed ALL attempts to call API"
+    logging.getLogger().debug('[waf_update_ip_set] Start')
+
+    ip_type = "IPV%s"%ip_address(source_ip).version
+    ip_class = "32" if ip_type == "IPV4" else "128"
+    waf.update_ip_set(IPSetId=ip_set_id,
+        ChangeToken=waf.get_change_token()['ChangeToken'],
+        Updates=[{
+            'Action': 'INSERT',
+            'IPSetDescriptor': {
+                'Type': ip_type,
+                'Value': "%s/%s"%(source_ip, ip_class)
+            }
+        }]
+    )
+
+    logging.getLogger().debug('[waf_update_ip_set] End')
 
 def waf_get_ip_set(ip_set_id):
-    response = None
-    for attempt in range(API_CALL_NUM_RETRIES):
-        try:
-            response = waf.get_ip_set(IPSetId=ip_set_id)
-        except Exception, e:
-            delay = math.pow(2, attempt)
-            print("[waf_get_ip_set] Retrying in %d seconds..." % (delay))
-            time.sleep(delay)
-        else:
-            break
-    else:
-        print("[waf_get_ip_set] Failed ALL attempts to call API")
-
+    logging.getLogger().debug('[waf_get_ip_set] Start')
+    response = waf.get_ip_set(IPSetId=ip_set_id)
+    logging.getLogger().debug('[waf_get_ip_set] End')
     return response
 
 def send_anonymous_usage_data():
-    if environ['SEND_ANONYMOUS_USAGE_DATA'] != 'yes':
-        return
-
     try:
-        print("[send_anonymous_usage_data] Start")
-        bad_bot_ip_set_size = 0
-        allowed_requests = 0
-        blocked_requests_all = 0
-        blocked_requests_bad_bot = 0
+        if 'SEND_ANONYMOUS_USAGE_DATA' not in environ or environ['SEND_ANONYMOUS_USAGE_DATA'].lower() != 'yes':
+            return
+
+        logging.getLogger().debug("[send_anonymous_usage_data] Start")
+
+        cw = boto3.client('cloudwatch')
+        usage_data = {
+          "Solution": "SO0006",
+          "UUID": environ['UUID'],
+          "TimeStamp": str(datetime.datetime.utcnow().isoformat()),
+          "Data":
+          {
+              "data_type" : "bad_bot",
+              "bad_bot_ip_set_size" : 0,
+              "allowed_requests" : 0,
+              "blocked_requests_all" : 0,
+              "blocked_requests_bad_bot" : 0,
+              "waf_type" : environ['LOG_TYPE']
+          }
+        }
 
         #--------------------------------------------------------------------------------------------------------------
-        print("[send_anonymous_usage_data] Get Bad Bot IP Set Size")
-        #--------------------------------------------------------------------------------------------------------------
-        response = waf_get_ip_set(environ['IP_SET_ID_BAD_BOT'])
-        if response != None:
-            bad_bot_ip_set_size = len(response['IPSet']['IPSetDescriptors'])
-
-        #--------------------------------------------------------------------------------------------------------------
-        print("[send_anonymous_usage_data] Get Num Allowed Requests")
+        logging.getLogger().debug("[send_anonymous_usage_data] Get num allowed requests")
         #--------------------------------------------------------------------------------------------------------------
         try:
-            cw = boto3.client('cloudwatch')
             response = cw.get_metric_statistics(
                 MetricName='AllowedRequests',
                 Namespace='WAF',
@@ -105,19 +99,20 @@ def send_anonymous_usage_data():
                     },
                     {
                         "Name": "WebACL",
-                        "Value": "SecurityAutomationsMaliciousRequesters"
+                        "Value": environ['METRIC_NAME_PREFIX'] + 'MaliciousRequesters'
                     }
                 ]
             )
-            allowed_requests = response['Datapoints'][0]['Sum']
-        except Exception, e:
-            print("[send_anonymous_usage_data] Error to get Num Allowed Requests")
+            usage_data['Data']['allowed_requests'] = response['Datapoints'][0]['Sum']
+
+        except Exception as error:
+            logging.getLogger().debug("[send_anonymous_usage_data] Failed to get Num Allowed Requests")
+            logging.getLogger().debug(str(error))
 
         #--------------------------------------------------------------------------------------------------------------
-        print("[send_anonymous_usage_data] Get Num Blocked Requests - All Rules")
+        logging.getLogger().info("[send_anonymous_usage_data] Get num blocked requests - all rules")
         #--------------------------------------------------------------------------------------------------------------
         try:
-            cw = boto3.client('cloudwatch')
             response = cw.get_metric_statistics(
                 MetricName='BlockedRequests',
                 Namespace='WAF',
@@ -132,96 +127,98 @@ def send_anonymous_usage_data():
                     },
                     {
                         "Name": "WebACL",
-                        "Value": "SecurityAutomationsMaliciousRequesters"
+                        "Value": environ['METRIC_NAME_PREFIX'] + 'MaliciousRequesters'
                     }
                 ]
             )
-            blocked_requests_all = response['Datapoints'][0]['Sum']
-        except Exception, e:
-            print("[send_anonymous_usage_data] Error to get Num Blocked Requests")
+            usage_data['Data']['blocked_requests_all'] = response['Datapoints'][0]['Sum']
+
+        except Exception as error:
+            logging.getLogger().debug("[send_anonymous_usage_data] Failed to get num blocked requests - all rules")
+            logging.getLogger().debug(str(error))
 
         #--------------------------------------------------------------------------------------------------------------
-        print("[send_anonymous_usage_data] Get Num Blocked Requests - Bad Bot Rule")
+        logging.getLogger().debug("[send_anonymous_usage_data] Get bad bot data")
         #--------------------------------------------------------------------------------------------------------------
-        try:
-            cw = boto3.client('cloudwatch')
-            response = cw.get_metric_statistics(
-                MetricName='BlockedRequests',
-                Namespace='WAF',
-                Statistics=['Sum'],
-                Period=12*3600,
-                StartTime=datetime.datetime.utcnow() - datetime.timedelta(seconds=12*3600),
-                EndTime=datetime.datetime.utcnow(),
-                Dimensions=[
-                    {
-                        "Name": "Rule",
-                        "Value": "SecurityAutomationsBadBotRule"
-                    },
-                    {
-                        "Name": "WebACL",
-                        "Value": "SecurityAutomationsMaliciousRequesters"
-                    }
-                ]
-            )
-            blocked_requests_bad_bot = response['Datapoints'][0]['Sum']
-        except Exception, e:
-            print("[send_anonymous_usage_data] Error to get Num Blocked Requests")
+        if 'IP_SET_ID_BAD_BOT' in environ:
+            try:
+                response = waf_get_ip_set(environ['IP_SET_ID_BAD_BOT'])
+                if response != None:
+                    usage_data['Data']['bad_bot_ip_set_size'] = len(response['IPSet']['IPSetDescriptors'])
+
+                response = cw.get_metric_statistics(
+                    MetricName='BlockedRequests',
+                    Namespace='WAF',
+                    Statistics=['Sum'],
+                    Period=12*3600,
+                    StartTime=datetime.datetime.utcnow() - datetime.timedelta(seconds=12*3600),
+                    EndTime=datetime.datetime.utcnow(),
+                    Dimensions=[
+                        {
+                            "Name": "Rule",
+                            "Value": environ['METRIC_NAME_PREFIX'] + 'BadBotRule'
+                        },
+                        {
+                            "Name": "WebACL",
+                            "Value": environ['METRIC_NAME_PREFIX'] + 'MaliciousRequesters'
+                        }
+                    ]
+                )
+                usage_data['Data']['blocked_requests_bad_bot'] = response['Datapoints'][0]['Sum']
+
+            except Exception as error:
+                logging.getLogger().debug("[send_anonymous_usage_data] Failed to get bad bot data")
+                logging.getLogger().debug(str(error))
 
         #--------------------------------------------------------------------------------------------------------------
-        print("[send_anonymous_usage_data] Send Data")
+        logging.getLogger().info("[send_anonymous_usage_data] Send Data")
         #--------------------------------------------------------------------------------------------------------------
-        time_now = datetime.datetime.utcnow().isoformat()
-        time_stamp = str(time_now)
-        usage_data = {
-          "Solution": "SO0006",
-          "UUID": environ['UUID'],
-          "TimeStamp": time_stamp,
-          "Data":
-          {
-              "data_type" : "bad_bot",
-              "bad_bot_ip_set_size" : bad_bot_ip_set_size,
-              "allowed_requests" : allowed_requests,
-              "blocked_requests_all" : blocked_requests_all,
-              "blocked_requests_bad_bot" : blocked_requests_bad_bot,
-              "waf_type" : environ['LOG_TYPE']
-          }
-        }
-
         url = 'https://metrics.awssolutionsbuilder.com/generic'
-        data = json.dumps(usage_data)
-        headers = {'content-type': 'application/json'}
-        print("[send_anonymous_usage_data] %s"%data)
-        req = Request(url, data, headers)
+        req = Request(url, method='POST', data=bytes(json.dumps(usage_data), encoding='utf8'), headers={'Content-Type': 'application/json'})
         rsp = urlopen(req)
-        content = rsp.read()
         rspcode = rsp.getcode()
-        print('[send_anonymous_usage_data] Response Code: {}'.format(rspcode))
-        print('[send_anonymous_usage_data] Response Content: {}'.format(content))
+        logging.getLogger().debug('[send_anonymous_usage_data] Response Code: {}'.format(rspcode))
+        logging.getLogger().debug("[send_anonymous_usage_data] End")
 
-        print("[send_anonymous_usage_data] End")
-    except Exception, e:
-        print("[send_anonymous_usage_data] Failed to Send Data")
+    except Exception as error:
+        logging.getLogger().debug("[send_anonymous_usage_data] Failed to Send Data")
+        logging.getLogger().debug(str(error))
 
 #======================================================================================================================
 # Lambda Entry Point
 #======================================================================================================================
 def lambda_handler(event, context):
+    logging.getLogger().debug('[lambda_handler] Start')
+
     response = {
         'statusCode': 200,
         'headers': {'Content-Type': 'application/json'},
         'body': ''
     }
 
-    print '[lambda_handler] Start'
     try:
+        #------------------------------------------------------------------
+        # Set Log Level
+        #------------------------------------------------------------------
+        global log_level
+        log_level = str(environ['LOG_LEVEL'].upper())
+        if log_level not in ['DEBUG', 'INFO','WARNING', 'ERROR','CRITICAL']:
+            log_level = 'ERROR'
+        logging.getLogger().setLevel(log_level)
+
+        #----------------------------------------------------------
+        # Read inputs parameters
+        #----------------------------------------------------------
+        logging.getLogger().info(event)
+        source_ip = event['headers']['X-Forwarded-For'].split(',')[0].strip()
+
         global waf
         if environ['LOG_TYPE'] == 'alb':
             session = boto3.session.Session(region_name=environ['REGION'])
-            waf = session.client('waf-regional')
+            waf = session.client('waf-regional', config=Config(retries={'max_attempts': API_CALL_NUM_RETRIES}))
         else:
-            waf = boto3.client('waf')
+            waf = boto3.client('waf', config=Config(retries={'max_attempts': API_CALL_NUM_RETRIES}))
 
-        source_ip = event['headers']['X-Forwarded-For'].encode('utf8').split(',')[0].strip()
         waf_update_ip_set(environ['IP_SET_ID_BAD_BOT'], source_ip)
 
         message = {}
@@ -230,8 +227,8 @@ def lambda_handler(event, context):
 
         send_anonymous_usage_data()
 
-    except Exception as e:
-        print e
-    print '[lambda_handler] End'
+    except Exception as error:
+        logging.getLogger().error(str(error))
 
+    logging.getLogger().debug('[lambda_handler] End')
     return response

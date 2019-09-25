@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: >-
-  (SO0006-ALB) - AWS WAF Security Automations - ALB %%VERSION%%: This AWS CloudFormation template helps
+  (SO0006-CloudFront) - AWS WAF Security Automations %%VERSION%%: This AWS CloudFormation template helps
   you provision the AWS WAF Security Automations stack without worrying about creating and
   configuring the underlying AWS infrastructure.
 
@@ -94,41 +94,41 @@ Conditions:
 
 Resources:
   WAFWhitelistSet:
-    Type: 'AWS::WAFRegional::IPSet'
+    Type: 'AWS::WAF::IPSet'
     Properties:
       Name: !Sub '${ParentStackName} - Whitelist Set'
 
   WAFBlacklistSet:
-    Type: 'AWS::WAFRegional::IPSet'
+    Type: 'AWS::WAF::IPSet'
     Properties:
       Name: !Sub '${ParentStackName} - Blacklist Set'
 
   WAFHttpFloodSet:
-    Type: 'AWS::WAFRegional::IPSet'
+    Type: 'AWS::WAF::IPSet'
     Condition: HttpFloodProtectionLogParserActivated
     Properties:
       Name: !Sub '${ParentStackName} - HTTP Flood Set'
 
   WAFScannersProbesSet:
-    Type: 'AWS::WAFRegional::IPSet'
+    Type: 'AWS::WAF::IPSet'
     Condition: ScannersProbesProtectionActivated
     Properties:
       Name: !Sub '${ParentStackName} - Scanners & Probes Set'
 
   WAFReputationListsSet:
-    Type: 'AWS::WAFRegional::IPSet'
+    Type: 'AWS::WAF::IPSet'
     Condition: ReputationListsProtectionActivated
     Properties:
       Name: !Sub '${ParentStackName} - IP Reputation Lists Set'
 
   WAFBadBotSet:
-    Type: 'AWS::WAFRegional::IPSet'
+    Type: 'AWS::WAF::IPSet'
     Condition: BadBotProtectionActivated
     Properties:
       Name: !Sub '${ParentStackName} - IP Bad Bot Set'
 
   WAFSqlInjectionDetection:
-    Type: 'AWS::WAFRegional::SqlInjectionMatchSet'
+    Type: 'AWS::WAF::SqlInjectionMatchSet'
     Condition: SqlInjectionProtectionActivated
     Properties:
       Name: !Sub '${ParentStackName} - SQL injection Detection'
@@ -169,7 +169,7 @@ Resources:
           TextTransformation: HTML_ENTITY_DECODE
 
   WAFXssDetection:
-    Type: 'AWS::WAFRegional::XssMatchSet'
+    Type: 'AWS::WAF::XssMatchSet'
     Condition: CrossSiteScriptingProtectionActivated
     Properties:
       Name: !Sub '${ParentStackName} - XSS Detection Detection'
@@ -202,7 +202,7 @@ Resources:
           TextTransformation: HTML_ENTITY_DECODE
 
   WAFWhitelistRule:
-    Type: 'AWS::WAFRegional::Rule'
+    Type: 'AWS::WAF::Rule'
     Properties:
       Name: !Sub '${ParentStackName} - Whitelist Rule'
       MetricName: !Join ['', [!Join ['', !Split ['-', !Ref ParentStackName]], 'WhitelistRule']]
@@ -212,7 +212,7 @@ Resources:
           Type: IPMatch
 
   WAFBlacklistRule:
-    Type: 'AWS::WAFRegional::Rule'
+    Type: 'AWS::WAF::Rule'
     Properties:
       Name: !Sub '${ParentStackName} - Blacklist Rule'
       MetricName: !Join ['', [!Join ['', !Split ['-', !Ref ParentStackName]], 'BlacklistRule']]
@@ -222,7 +222,7 @@ Resources:
           Type: IPMatch
 
   WAFHttpFloodRegularRule:
-    Type: 'AWS::WAFRegional::Rule'
+    Type: 'AWS::WAF::Rule'
     Condition: HttpFloodProtectionLogParserActivated
     Properties:
       Name: !Sub '${ParentStackName} - HTTP Flood Rule'
@@ -233,7 +233,7 @@ Resources:
           Type: IPMatch
 
   WAFScannersProbesRule:
-    Type: 'AWS::WAFRegional::Rule'
+    Type: 'AWS::WAF::Rule'
     Condition: ScannersProbesProtectionActivated
     Properties:
       Name: !Sub '${ParentStackName} - Scanners & Probes Rule'
@@ -244,7 +244,7 @@ Resources:
           Type: IPMatch
 
   WAFIPReputationListsRule:
-    Type: 'AWS::WAFRegional::Rule'
+    Type: 'AWS::WAF::Rule'
     Condition: ReputationListsProtectionActivated
     Properties:
       Name: !Sub '${ParentStackName} - WAF IP Reputation Lists Rule'
@@ -255,7 +255,7 @@ Resources:
           Type: IPMatch
 
   WAFBadBotRule:
-    Type: 'AWS::WAFRegional::Rule'
+    Type: 'AWS::WAF::Rule'
     Condition: BadBotProtectionActivated
     Properties:
       Name: !Sub '${ParentStackName} - Bad Bot Rule'
@@ -266,7 +266,7 @@ Resources:
           Type: IPMatch
 
   WAFSqlInjectionRule:
-    Type: 'AWS::WAFRegional::Rule'
+    Type: 'AWS::WAF::Rule'
     Condition: SqlInjectionProtectionActivated
     Properties:
       Name: !Sub '${ParentStackName} - SQL Injection Rule'
@@ -277,7 +277,7 @@ Resources:
           Type: SqlInjectionMatch
 
   WAFXssRule:
-    Type: 'AWS::WAFRegional::Rule'
+    Type: 'AWS::WAF::Rule'
     Condition: CrossSiteScriptingProtectionActivated
     Properties:
       Name: !Sub '${ParentStackName} - XSS Rule'
@@ -288,7 +288,7 @@ Resources:
           Type: XssMatch
 
   WAFWebACL:
-    Type: 'AWS::WAFRegional::WebACL'
+    Type: 'AWS::WAF::WebACL'
     Properties:
       Name: !Ref 'ParentStackName'
       DefaultAction:
@@ -690,10 +690,10 @@ Resources:
                 - Effect: Allow
                   Action: 'iam:CreateServiceLinkedRole'
                   Resource:
-                    - 'arn:aws:iam::*:role/aws-service-role/waf-regional.amazonaws.com/AWSServiceRoleForWAFRegionalLogging'
+                    - 'arn:aws:iam::*:role/aws-service-role/waf.amazonaws.com/AWSServiceRoleForWAFLogging'
                   Condition:
                     StringLike:
-                      iam:AWSServiceName: 'waf-regional.amazonaws.com'
+                      iam:AWSServiceName: 'waf.amazonaws.com'
           - !Ref 'AWS::NoValue'
         - PolicyName: CloudFormationAccess
           PolicyDocument:
